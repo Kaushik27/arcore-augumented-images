@@ -1,29 +1,21 @@
-/*
- * Copyright 2018 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package com.google.ar.sceneform.samples.augmentedimage;
 
 import android.content.Context;
 import android.net.Uri;
 import android.util.Log;
 import com.google.ar.core.AugmentedImage;
+import com.google.ar.core.Pose;
 import com.google.ar.sceneform.AnchorNode;
 import com.google.ar.sceneform.Node;
+import com.google.ar.sceneform.math.Quaternion;
 import com.google.ar.sceneform.math.Vector3;
+import com.google.ar.sceneform.rendering.Color;
+import com.google.ar.sceneform.rendering.MaterialFactory;
 import com.google.ar.sceneform.rendering.ModelRenderable;
+import com.google.ar.sceneform.rendering.Renderable;
+import com.google.ar.sceneform.rendering.ShapeFactory;
+import com.google.ar.schemas.lull.Quat;
+
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -33,99 +25,92 @@ import java.util.concurrent.CompletableFuture;
 @SuppressWarnings({"AndroidApiChecker"})
 public class AugmentedImageNode extends AnchorNode {
 
-  private static final String TAG = "AugmentedImageNode";
+    private static final String TAG = "AugmentedImageNode";
 
-  // The augmented image represented by this node.
-  private AugmentedImage image;
+    // The augmented image represented by this node.
+    private AugmentedImage image;
+    private Node mazeNode;
+    private Node ballNode;
 
-  // Models of the 4 corners.  We use completable futures here to simplify
-  // the error handling and asynchronous loading.  The loading is started with the
-  // first construction of an instance, and then used when the image is set.
-  private static CompletableFuture<ModelRenderable> ulCorner;
-  private static CompletableFuture<ModelRenderable> urCorner;
-  private static CompletableFuture<ModelRenderable> lrCorner;
-  private static CompletableFuture<ModelRenderable> llCorner;
+    private CompletableFuture<ModelRenderable> mazeRenderable;
+    private ModelRenderable ballRenderable;
+    private float maze_scale = 0.0f;
 
-  public AugmentedImageNode(Context context) {
-    // Upon construction, start loading the models for the corners of the frame.
-    if (ulCorner == null) {
-      ulCorner =
-          ModelRenderable.builder()
-              .setSource(context, Uri.parse("models/frame_upper_left.sfb"))
-              .build();
-      urCorner =
-          ModelRenderable.builder()
-              .setSource(context, Uri.parse("models/frame_upper_right.sfb"))
-              .build();
-      llCorner =
-          ModelRenderable.builder()
-              .setSource(context, Uri.parse("models/frame_lower_left.sfb"))
-              .build();
-      lrCorner =
-          ModelRenderable.builder()
-              .setSource(context, Uri.parse("models/frame_lower_right.sfb"))
-              .build();
-    }
-  }
+    public AugmentedImageNode(Context context) {
+        mazeRenderable =
+                ModelRenderable.builder()
+                        .setSource(context, Uri.parse("GreenMaze.sfb"))
+                        .build();
 
-  /**
-   * Called when the AugmentedImage is detected and should be rendered. A Sceneform node tree is
-   * created based on an Anchor created from the image. The corners are then positioned based on the
-   * extents of the image. There is no need to worry about world coordinates since everything is
-   * relative to the center of the image, which is the parent node of the corners.
-   */
-  @SuppressWarnings({"AndroidApiChecker", "FutureReturnValueIgnored"})
-  public void setImage(AugmentedImage image) {
-    this.image = image;
-
-    // If any of the models are not loaded, then recurse when all are loaded.
-    if (!ulCorner.isDone() || !urCorner.isDone() || !llCorner.isDone() || !lrCorner.isDone()) {
-      CompletableFuture.allOf(ulCorner, urCorner, llCorner, lrCorner)
-          .thenAccept((Void aVoid) -> setImage(image))
-          .exceptionally(
-              throwable -> {
-                Log.e(TAG, "Exception loading", throwable);
-                return null;
-              });
+        MaterialFactory.makeOpaqueWithColor(context, new Color(android.graphics.Color.RED))
+                .thenAccept(
+                        material -> {
+                            ballRenderable =
+                                    ShapeFactory.makeSphere(0.01f, new Vector3(0, 0, 0), material); });
     }
 
-    // Set the anchor based on the center of the image.
-    setAnchor(image.createAnchor(image.getCenterPose()));
+    /**
+     * Called when the AugmentedImage is detected and should be rendered. A Sceneform node tree is
+     * created based on an Anchor created from the image. The corners are then positioned based on the
+     * extents of the image. There is no need to worry about world coordinates since everything is
+     * relative to the center of the image, which is the parent node of the corners.
+     */
+    @SuppressWarnings({"AndroidApiChecker", "FutureReturnValueIgnored"})
+    public void setImage(AugmentedImage image) {
+        this.image = image;
 
-    // Make the 4 corner nodes.
-    Vector3 localPosition = new Vector3();
-    Node cornerNode;
+        // If any of the models are not loaded, then recurse when all are loaded.
+        if (!mazeRenderable.isDone()) {
+            Log.d(TAG, "loading maze renderable still in progress. Wait to render again");
+            CompletableFuture.allOf(mazeRenderable)
+                    .thenAccept((Void aVoid) -> setImage(image))
+                    .exceptionally(
+                            throwable -> {
+                                Log.e(TAG, "Exception loading", throwable);
+                                return null;
+                            });
+            return;
+        }
 
-    // Upper left corner.
-    localPosition.set(-0.5f * image.getExtentX(), 0.0f, -0.5f * image.getExtentZ());
-    cornerNode = new Node();
-    cornerNode.setParent(this);
-    cornerNode.setLocalPosition(localPosition);
-    cornerNode.setRenderable(ulCorner.getNow(null));
+        // Set the anchor based on the center of the image.
+        setAnchor(image.createAnchor(image.getCenterPose()));
 
-    // Upper right corner.
-    localPosition.set(0.5f * image.getExtentX(), 0.0f, -0.5f * image.getExtentZ());
-    cornerNode = new Node();
-    cornerNode.setParent(this);
-    cornerNode.setLocalPosition(localPosition);
-    cornerNode.setRenderable(urCorner.getNow(null));
+        mazeNode = new Node();
+        mazeNode.setParent(this);
+        mazeNode.setRenderable(mazeRenderable.getNow(null));
 
-    // Lower right corner.
-    localPosition.set(0.5f * image.getExtentX(), 0.0f, 0.5f * image.getExtentZ());
-    cornerNode = new Node();
-    cornerNode.setParent(this);
-    cornerNode.setLocalPosition(localPosition);
-    cornerNode.setRenderable(lrCorner.getNow(null));
+        // Make sure longest edge fits inside the image
+        final float maze_edge_size = 492.65f;
+        final float max_image_edge = Math.max(image.getExtentX(), image.getExtentZ());
+        maze_scale = max_image_edge / maze_edge_size;
 
-    // Lower left corner.
-    localPosition.set(-0.5f * image.getExtentX(), 0.0f, 0.5f * image.getExtentZ());
-    cornerNode = new Node();
-    cornerNode.setParent(this);
-    cornerNode.setLocalPosition(localPosition);
-    cornerNode.setRenderable(llCorner.getNow(null));
-  }
+        // Scale Y extra 10 times to lower the wall of maze
+        mazeNode.setLocalScale(new Vector3(maze_scale, maze_scale * 0.1f, maze_scale));
 
-  public AugmentedImage getImage() {
-    return image;
-  }
+        // Add the ball
+        ballNode = new Node();
+        ballNode.setParent(this);
+        ballNode.setRenderable(ballRenderable);
+        ballNode.setLocalPosition(new Vector3(0, 0.1f, 0)); // start pos for debugging
+
+        // Expected maze mesh size of ball(in original mesh vertices) is 13 diagram, 6.5 radius.
+        // when mesh is scaled down to max_image_edge, radius will be scaled down to 6.5 * scale.
+        // The sphere is already 0.01, so we need to scale the ball ball_scale = 6.5 * scale / 0.01f
+        ballNode.setLocalScale(new Vector3(
+                6.5f * maze_scale / 0.01f,
+                6.5f * maze_scale / 0.01f,
+                6.5f * maze_scale / 0.01f));
+    }
+
+    public void updateBallPose(Pose pose) {
+        if (ballNode == null)
+            return;
+
+        ballNode.setLocalPosition(new Vector3(pose.tx() * maze_scale, pose.ty()* maze_scale, pose.tz()* maze_scale));
+        ballNode.setLocalRotation(new Quaternion(pose.qx(), pose.qy(), pose.qz(), pose.qw()));
+    }
+
+    public AugmentedImage getImage() {
+        return image;
+    }
 }

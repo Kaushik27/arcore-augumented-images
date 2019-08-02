@@ -18,97 +18,135 @@ package com.google.ar.sceneform.samples.augmentedimage;
 
 import android.os.Bundle;
 import android.support.v7.app.AppCompatActivity;
+import android.util.Log;
 import android.view.View;
 import android.widget.ImageView;
+
+import com.bulletphysics.linearmath.Transform;
 import com.google.ar.core.AugmentedImage;
 import com.google.ar.core.Frame;
+import com.google.ar.core.Pose;
+import com.google.ar.core.TrackingState;
 import com.google.ar.sceneform.FrameTime;
+import com.google.ar.sceneform.math.Quaternion;
+import com.google.ar.sceneform.math.Vector3;
 import com.google.ar.sceneform.samples.common.helpers.SnackbarHelper;
 import com.google.ar.sceneform.ux.ArFragment;
+
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
+import javax.vecmath.Quat4f;
+import javax.vecmath.Vector3f;
+
+import static com.bulletphysics.collision.dispatch.CollisionObject.DISABLE_DEACTIVATION;
+
 /**
  * This application demonstrates using augmented images to place anchor nodes. app to include image
  * tracking functionality.
- *
- * <p>In this example, we assume all images are static or moving slowly with a large occupation of
- * the screen. If the target is actively moving, we recommend to check
- * ArAugmentedImage_getTrackingMethod() and render only when the tracking method equals to
- * AR_AUGMENTED_IMAGE_TRACKING_METHOD_FULL_TRACKING. See details in <a
- * href="https://developers.google.com/ar/develop/c/augmented-images/">Recognize and Augment
- * Images</a>.
  */
 public class AugmentedImageActivity extends AppCompatActivity {
 
-  private ArFragment arFragment;
-  private ImageView fitToScanView;
+    private ArFragment arFragment;
+    private ImageView fitToScanView;
 
-  // Augmented image and its associated center pose anchor, keyed by the augmented image in
-  // the database.
-  private final Map<AugmentedImage, AugmentedImageNode> augmentedImageMap = new HashMap<>();
+    // Augmented image and its associated center pose anchor, keyed by the augmented image in
+    // the database.
+    private final Map<AugmentedImage, AugmentedImageNode> augmentedImageMap = new HashMap<>();
 
-  @Override
-  protected void onCreate(Bundle savedInstanceState) {
-    super.onCreate(savedInstanceState);
-    setContentView(R.layout.activity_main);
+    private PhysicsController physicsController;
 
-    arFragment = (ArFragment) getSupportFragmentManager().findFragmentById(R.id.ux_fragment);
-    fitToScanView = findViewById(R.id.image_view_fit_to_scan);
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
 
-    arFragment.getArSceneView().getScene().addOnUpdateListener(this::onUpdateFrame);
-  }
+        arFragment = (ArFragment) getSupportFragmentManager().findFragmentById(R.id.ux_fragment);
+        fitToScanView = findViewById(R.id.image_view_fit_to_scan);
 
-  @Override
-  protected void onResume() {
-    super.onResume();
-    if (augmentedImageMap.isEmpty()) {
-      fitToScanView.setVisibility(View.VISIBLE);
-    }
-  }
-
-  /**
-   * Registered with the Sceneform Scene object, this method is called at the start of each frame.
-   *
-   * @param frameTime - time since last frame.
-   */
-  private void onUpdateFrame(FrameTime frameTime) {
-    Frame frame = arFragment.getArSceneView().getArFrame();
-
-    // If there is no frame, just return.
-    if (frame == null) {
-      return;
+        arFragment.getArSceneView().getScene().addOnUpdateListener(this::onUpdateFrame);
     }
 
-    Collection<AugmentedImage> updatedAugmentedImages =
-        frame.getUpdatedTrackables(AugmentedImage.class);
-    for (AugmentedImage augmentedImage : updatedAugmentedImages) {
-      switch (augmentedImage.getTrackingState()) {
-        case PAUSED:
-          // When an image is in PAUSED state, but the camera is not PAUSED, it has been detected,
-          // but not yet tracked.
-          String text = "Detected Image " + augmentedImage.getIndex();
-          SnackbarHelper.getInstance().showMessage(this, text);
-          break;
 
-        case TRACKING:
-          // Have to switch to UI Thread to update View.
-          fitToScanView.setVisibility(View.GONE);
-
-          // Create a new anchor for newly found images.
-          if (!augmentedImageMap.containsKey(augmentedImage)) {
-            AugmentedImageNode node = new AugmentedImageNode(this);
-            node.setImage(augmentedImage);
-            augmentedImageMap.put(augmentedImage, node);
-            arFragment.getArSceneView().getScene().addChild(node);
-          }
-          break;
-
-        case STOPPED:
-          augmentedImageMap.remove(augmentedImage);
-          break;
-      }
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (augmentedImageMap.isEmpty()) {
+            fitToScanView.setVisibility(View.VISIBLE);
+        }
     }
-  }
+
+
+    /**
+     * Registered with the Sceneform Scene object, this method is called at the start of each frame.
+     *
+     * @param frameTime - time since last frame.
+     */
+    private void onUpdateFrame(FrameTime frameTime) {
+        Frame frame = arFragment.getArSceneView().getArFrame();
+
+        // If there is no frame or ARCore is not tracking yet, just return.
+        if (frame == null || frame.getCamera().getTrackingState() != TrackingState.TRACKING) {
+            return;
+        }
+
+        Collection<AugmentedImage> updatedAugmentedImages =
+                frame.getUpdatedTrackables(AugmentedImage.class);
+        for (AugmentedImage augmentedImage : updatedAugmentedImages) {
+            switch (augmentedImage.getTrackingState()) {
+                case PAUSED:
+                    // When an image is in PAUSED state, but the camera is not PAUSED, it has been detected,
+                    // but not yet tracked.
+                    String text = "Detected Image " + augmentedImage.getIndex();
+                    SnackbarHelper.getInstance().showMessage(this, text);
+                    break;
+
+                case TRACKING:
+                    // Have to switch to UI Thread to update View.
+                    fitToScanView.setVisibility(View.GONE);
+
+                    // Create a new anchor for newly found images.
+                    if (!augmentedImageMap.containsKey(augmentedImage)) {
+                        AugmentedImageNode node = new AugmentedImageNode(this);
+                        node.setImage(augmentedImage);
+                        augmentedImageMap.put(augmentedImage, node);
+                        arFragment.getArSceneView().getScene().addChild(node);
+
+                        physicsController = new PhysicsController(this);
+
+
+                    } else {
+                        // If the image anchor is already created
+                        AugmentedImageNode node = augmentedImageMap.get(augmentedImage);
+                        node.updateBallPose(physicsController.getBallPose());
+
+                        // Use real world gravity, (0, -10, 0) as gravity
+                        // Convert to Physics world coordinate (because Maze mesh has to be static)
+                        // Use it as a force to move the ball
+//                        Pose worldGravityPose = Pose.makeTranslation(0, -10f, 0);
+
+                        // Fun experiment, use camera direction as gravity
+                        float cameraZDir[] = frame.getCamera().getPose().getZAxis();
+                        Vector3 cameraZVector = new Vector3(cameraZDir[0], cameraZDir[1], cameraZDir[2]);
+                        Vector3 cameraGravity = cameraZVector.negated().scaled(10);
+                        Pose worldGravityPose = Pose.makeTranslation(
+                                cameraGravity.x, cameraGravity.y, cameraGravity.z);
+
+//                        Pose mazeGravityPose = augmentedImage.getCenterPose().inverse().compose(worldGravityPose);
+                        float mazeGravity[] = worldGravityPose.getTranslation();
+                        physicsController.applyGravityToBall(mazeGravity);
+
+                        physicsController.updatePhysics();
+                    }
+                    break;
+
+                case STOPPED:
+                    AugmentedImageNode node = augmentedImageMap.get(augmentedImage);
+                    augmentedImageMap.remove(augmentedImage);
+                    arFragment.getArSceneView().getScene().removeChild(node);
+                    break;
+            }
+        }
+    }
 }
